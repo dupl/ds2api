@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode"
 
 	"ds2api/internal/auth"
 	"ds2api/internal/config"
@@ -20,8 +21,9 @@ func (c *Client) Login(ctx context.Context, acc config.Account) (string, error) 
 	if email := strings.TrimSpace(acc.Email); email != "" {
 		payload["email"] = email
 	} else if mobile := strings.TrimSpace(acc.Mobile); mobile != "" {
-		payload["mobile"] = mobile
-		payload["area_code"] = nil
+		loginMobile, areaCode := normalizeMobileForLogin(mobile)
+		payload["mobile"] = loginMobile
+		payload["area_code"] = areaCode
 	} else {
 		return "", errors.New("missing email/mobile")
 	}
@@ -150,4 +152,27 @@ func isTokenInvalid(status int, code int, msg string) bool {
 		return true
 	}
 	return strings.Contains(msg, "token") || strings.Contains(msg, "unauthorized")
+}
+
+func normalizeMobileForLogin(raw string) (mobile string, areaCode any) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", nil
+	}
+	hasPlus := strings.HasPrefix(s, "+")
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	digits := b.String()
+	if digits == "" {
+		return "", nil
+	}
+	if (hasPlus || strings.HasPrefix(digits, "86")) && strings.HasPrefix(digits, "86") && len(digits) == 13 {
+		return digits[2:], nil
+	}
+	return digits, nil
 }
