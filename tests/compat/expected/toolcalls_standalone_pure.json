@@ -6,5 +6,8 @@
         "path": "README.MD"
       }
     }
-  ]
+  ],
+  "sawToolCallSyntax": true,
+  "rejectedByPolicy": false,
+  "rejectedToolNames": []
 }

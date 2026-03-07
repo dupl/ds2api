@@ -33,12 +33,16 @@ func ParseToolCallsDetailed(text string, availableToolNames []string) ToolCallPa
 	if strings.TrimSpace(text) == "" {
 		return result
 	}
-	result.SawToolCallSyntax = strings.Contains(strings.ToLower(text), "tool_calls")
+	result.SawToolCallSyntax = looksLikeToolCallSyntax(text)
 
 	candidates := buildToolCallCandidates(text)
 	var parsed []ParsedToolCall
 	for _, candidate := range candidates {
-		if tc := parseToolCallsPayload(candidate); len(tc) > 0 {
+		tc := parseToolCallsPayload(candidate)
+		if len(tc) == 0 {
+			tc = parseMarkupToolCalls(candidate)
+		}
+		if len(tc) > 0 {
 			parsed = tc
 			result.SawToolCallSyntax = true
 			break
@@ -68,17 +72,18 @@ func ParseStandaloneToolCallsDetailed(text string, availableToolNames []string) 
 	if looksLikeToolExampleContext(trimmed) {
 		return result
 	}
-	result.SawToolCallSyntax = strings.Contains(strings.ToLower(trimmed), "tool_calls")
+	result.SawToolCallSyntax = looksLikeToolCallSyntax(trimmed)
 	candidates := []string{trimmed}
 	for _, candidate := range candidates {
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" {
 			continue
 		}
-		if !strings.HasPrefix(candidate, "{") && !strings.HasPrefix(candidate, "[") {
-			continue
+		parsed := parseToolCallsPayload(candidate)
+		if len(parsed) == 0 {
+			parsed = parseMarkupToolCalls(candidate)
 		}
-		if parsed := parseToolCallsPayload(candidate); len(parsed) > 0 {
+		if len(parsed) > 0 {
 			result.SawToolCallSyntax = true
 			calls, rejectedNames := filterToolCallsDetailed(parsed, availableToolNames)
 			result.Calls = calls
@@ -106,27 +111,32 @@ func filterToolCallsDetailed(parsed []ParsedToolCall, availableToolNames []strin
 	}
 	if len(allowed) == 0 {
 		rejectedSet := map[string]struct{}{}
+		rejected := make([]string, 0, len(parsed))
 		for _, tc := range parsed {
 			if tc.Name == "" {
 				continue
 			}
+			if _, ok := rejectedSet[tc.Name]; ok {
+				continue
+			}
 			rejectedSet[tc.Name] = struct{}{}
-		}
-		rejected := make([]string, 0, len(rejectedSet))
-		for name := range rejectedSet {
-			rejected = append(rejected, name)
+			rejected = append(rejected, tc.Name)
 		}
 		return nil, rejected
 	}
 	out := make([]ParsedToolCall, 0, len(parsed))
 	rejectedSet := map[string]struct{}{}
+	rejected := make([]string, 0)
 	for _, tc := range parsed {
 		if tc.Name == "" {
 			continue
 		}
 		matchedName := resolveAllowedToolName(tc.Name, allowed, allowedCanonical)
 		if matchedName == "" {
-			rejectedSet[tc.Name] = struct{}{}
+			if _, ok := rejectedSet[tc.Name]; !ok {
+				rejectedSet[tc.Name] = struct{}{}
+				rejected = append(rejected, tc.Name)
+			}
 			continue
 		}
 		tc.Name = matchedName
@@ -134,10 +144,6 @@ func filterToolCallsDetailed(parsed []ParsedToolCall, availableToolNames []strin
 			tc.Input = map[string]any{}
 		}
 		out = append(out, tc)
-	}
-	rejected := make([]string, 0, len(rejectedSet))
-	for name := range rejectedSet {
-		rejected = append(rejected, name)
 	}
 	return out, rejected
 }
@@ -184,6 +190,14 @@ func parseToolCallsPayload(payload string) []ParsedToolCall {
 		return parseToolCallList(v)
 	}
 	return nil
+}
+
+func looksLikeToolCallSyntax(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "tool_calls") ||
+		strings.Contains(lower, "<tool_call") ||
+		strings.Contains(lower, "<function_call") ||
+		strings.Contains(lower, "<invoke")
 }
 
 func parseToolCallList(v any) []ParsedToolCall {

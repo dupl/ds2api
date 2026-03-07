@@ -1,3 +1,8 @@
 {
-  "calls": []
+  "calls": [],
+  "sawToolCallSyntax": true,
+  "rejectedByPolicy": true,
+  "rejectedToolNames": [
+    "unknown_tool"
+  ]
 }
