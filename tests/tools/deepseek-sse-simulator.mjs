@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const chatStream = require('../../api/chat-stream.js');
 const { parseChunkForContent } = chatStream.__test;
+const { trimContinuationOverlap } = chatStream.__test;
 
 function parseArgs(argv) {
   const out = {
@@ -179,6 +180,8 @@ function parseDeepSeekReplay(raw) {
   let currentType = 'thinking';
   let sawFinish = false;
   let outputText = '';
+  let thinkingText = '';
+  let textOutput = '';
   let parsedChunks = 0;
 
   for (const evt of events) {
@@ -201,7 +204,15 @@ function parseDeepSeekReplay(raw) {
       sawFinish = true;
     }
     for (const part of parsed.parts) {
-      outputText += part.text;
+      if (part.type === 'thinking') {
+        const trimmed = trimContinuationOverlap(thinkingText, part.text);
+        thinkingText += trimmed;
+        outputText += trimmed;
+      } else {
+        const trimmed = trimContinuationOverlap(textOutput, part.text);
+        textOutput += trimmed;
+        outputText += trimmed;
+      }
     }
   }
 

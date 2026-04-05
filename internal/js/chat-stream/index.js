@@ -34,6 +34,9 @@ const {
 const {
   handleVercelStream,
 } = require('./vercel_stream');
+const {
+  trimContinuationOverlap,
+} = require('./dedupe');
 
 async function handler(req, res) {
   setCorsHeaders(res);
@@ -119,4 +122,5 @@ module.exports.__test = {
   extractAccumulatedTokenUsage,
   isNodeStreamSupportedPath,
   extractPathname,
+  trimContinuationOverlap,
 };

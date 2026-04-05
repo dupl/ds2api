@@ -27,6 +27,9 @@ const {
   relayPreparedFailure,
   createLeaseReleaser,
 } = require('./http_internal');
+const {
+  trimContinuationOverlap,
+} = require('./dedupe');
 
 const DEEPSEEK_COMPLETION_URL = 'https://chat.deepseek.com/api/v0/chat/completion';
 
@@ -245,21 +248,29 @@ async function handleVercelStream(req, res, rawBody, payload) {
             if (!p.text) {
               continue;
             }
-            if (searchEnabled && isCitation(p.text)) {
-              continue;
-            }
             if (p.type === 'thinking') {
               if (thinkingEnabled) {
-                thinkingText += p.text;
-                sendDeltaFrame({ reasoning_content: p.text });
+                const trimmed = trimContinuationOverlap(thinkingText, p.text);
+                if (!trimmed) {
+                  continue;
+                }
+                thinkingText += trimmed;
+                sendDeltaFrame({ reasoning_content: trimmed });
               }
             } else {
-              outputText += p.text;
-              if (!toolSieveEnabled) {
-                sendDeltaFrame({ content: p.text });
+              const trimmed = trimContinuationOverlap(outputText, p.text);
+              if (!trimmed) {
                 continue;
               }
-              const events = processToolSieveChunk(toolSieveState, p.text, toolNames);
+              if (searchEnabled && isCitation(trimmed)) {
+                continue;
+              }
+              outputText += trimmed;
+              if (!toolSieveEnabled) {
+                sendDeltaFrame({ content: trimmed });
+                continue;
+              }
+              const events = processToolSieveChunk(toolSieveState, trimmed, toolNames);
               for (const evt of events) {
                 if (evt.type === 'tool_call_deltas') {
                   if (!emitEarlyToolDeltas) {

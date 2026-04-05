@@ -22,6 +22,7 @@ const {
   shouldSkipPath,
   isNodeStreamSupportedPath,
   extractPathname,
+  trimContinuationOverlap,
 } = handler.__test;
 
 test('chat-stream exposes parser test hooks', () => {
@@ -367,4 +368,11 @@ test('node stream path guard only allows /v1/chat/completions', () => {
 test('extractPathname strips query only', () => {
   assert.equal(extractPathname('/v1/chat/completions?stream=true'), '/v1/chat/completions');
   assert.equal(extractPathname('/v1beta/models/gemini-2.5-flash:streamGenerateContent?key=1'), '/v1beta/models/gemini-2.5-flash:streamGenerateContent');
+});
+
+test('trimContinuationOverlap preserves short normal tokens and trims long snapshots', () => {
+  assert.equal(trimContinuationOverlap('我们被问到', '我们'), '我们');
+  const existing = '我们被问到：这是一个很长的续答快照前缀，用来验证去重逻辑不会误伤正常 token。';
+  const incoming = `${existing}继续分析`;
+  assert.equal(trimContinuationOverlap(existing, incoming), '继续分析');
 });
