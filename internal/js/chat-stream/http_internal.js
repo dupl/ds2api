@@ -3,15 +3,9 @@
 const {
   writeOpenAIError,
 } = require('./error_shape');
-
-function setCorsHeaders(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, X-API-Key, X-Ds2-Target-Account, X-Vercel-Protection-Bypass',
-  );
-}
+const {
+  setCorsHeaders,
+} = require('./cors');
 
 function header(req, key) {
   if (!req || !req.headers) {

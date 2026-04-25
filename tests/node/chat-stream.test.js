@@ -9,6 +9,9 @@ const {
   processToolSieveChunk,
   flushToolSieve,
 } = require('../../internal/js/helpers/stream-tool-sieve.js');
+const {
+  setCorsHeaders,
+} = require('../../internal/js/chat-stream/http_internal.js');
 
 const {
   parseChunkForContent,
@@ -25,6 +28,18 @@ const {
   extractPathname,
   trimContinuationOverlap,
 } = handler.__test;
+
+function createMockResponse() {
+  const headers = new Map();
+  return {
+    setHeader(key, value) {
+      headers.set(String(key).toLowerCase(), value);
+    },
+    getHeader(key) {
+      return headers.get(String(key).toLowerCase());
+    },
+  };
+}
 
 test('chat-stream exposes parser test hooks', () => {
   assert.equal(typeof parseChunkForContent, 'function');
@@ -398,6 +413,32 @@ test('node stream path guard only allows /v1/chat/completions', () => {
 test('extractPathname strips query only', () => {
   assert.equal(extractPathname('/v1/chat/completions?stream=true'), '/v1/chat/completions');
   assert.equal(extractPathname('/v1beta/models/gemini-2.5-flash:streamGenerateContent?key=1'), '/v1beta/models/gemini-2.5-flash:streamGenerateContent');
+});
+
+test('setCorsHeaders reflects requested third-party headers and blocks internal-only headers', () => {
+  const res = createMockResponse();
+  setCorsHeaders(res, {
+    headers: {
+      origin: 'app://obsidian.md',
+      'access-control-request-headers': 'authorization, x-stainless-os, x-stainless-runtime, x-ds2-internal-token',
+      'access-control-request-private-network': 'true',
+    },
+  });
+
+  assert.equal(res.getHeader('access-control-allow-origin'), 'app://obsidian.md');
+  assert.equal(res.getHeader('access-control-allow-private-network'), 'true');
+  assert.equal(res.getHeader('access-control-max-age'), '600');
+
+  const allowHeaders = String(res.getHeader('access-control-allow-headers') || '').toLowerCase();
+  assert.equal(allowHeaders.includes('authorization'), true);
+  assert.equal(allowHeaders.includes('x-stainless-os'), true);
+  assert.equal(allowHeaders.includes('x-stainless-runtime'), true);
+  assert.equal(allowHeaders.includes('x-ds2-internal-token'), false);
+
+  const vary = String(res.getHeader('vary') || '').toLowerCase();
+  assert.equal(vary.includes('origin'), true);
+  assert.equal(vary.includes('access-control-request-headers'), true);
+  assert.equal(vary.includes('access-control-request-private-network'), true);
 });
 
 test('trimContinuationOverlap preserves short normal tokens and trims long snapshots', () => {
