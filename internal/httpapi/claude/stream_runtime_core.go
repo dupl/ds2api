@@ -43,6 +43,7 @@ type claudeStreamRuntime struct {
 	thinkingBlockIndex int
 	textBlockOpen      bool
 	textBlockIndex     int
+	textEmitted        bool
 	ended              bool
 	upstreamErr        string
 }
@@ -181,6 +182,7 @@ func (s *claudeStreamRuntime) onParsed(parsed sse.LineResult) streamengine.Parse
 					"text": cleanedText,
 				},
 			})
+			s.textEmitted = true
 			continue
 		}
 
@@ -226,6 +228,7 @@ func (s *claudeStreamRuntime) onParsed(parsed sse.LineResult) streamengine.Parse
 					"text": cleaned,
 				},
 			})
+			s.textEmitted = true
 		}
 	}
 

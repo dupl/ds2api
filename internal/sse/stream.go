@@ -11,8 +11,7 @@ import (
 
 const (
 	parsedLineBufferSize = 128
-	scannerBufferSize    = 64 * 1024
-	maxScannerLineSize   = 4 * 1024 * 1024
+	lineReaderBufferSize = 64 * 1024
 )
 
 type AccumulateConfig struct {
@@ -44,8 +43,7 @@ func startParsedLinePumpWithConfig(ctx context.Context, body io.Reader, thinking
 	go func() {
 		defer close(out)
 
-		scanner := bufio.NewScanner(body)
-		scanner.Buffer(make([]byte, 0, scannerBufferSize), maxScannerLineSize)
+		reader := bufio.NewReaderSize(body, lineReaderBufferSize)
 		currentType := initialType
 
 		var pumpErr error
@@ -62,19 +60,27 @@ func startParsedLinePumpWithConfig(ctx context.Context, body io.Reader, thinking
 		scanDone := make(chan error, 1)
 
 		go func() {
-			for scanner.Scan() {
-				line := make([]byte, len(scanner.Bytes()))
-				copy(line, scanner.Bytes())
-				select {
-				case scanCh <- line:
-				case <-ctx.Done():
+			for {
+				line, err := reader.ReadBytes('\n')
+				if len(line) > 0 {
+					copied := append([]byte(nil), line...)
+					select {
+					case scanCh <- copied:
+					case <-ctx.Done():
+						close(scanCh)
+						scanDone <- ctx.Err()
+						return
+					}
+				}
+				if err != nil {
 					close(scanCh)
-					scanDone <- ctx.Err()
+					if err == io.EOF {
+						err = nil
+					}
+					scanDone <- err
 					return
 				}
 			}
-			close(scanCh)
-			scanDone <- scanner.Err()
 		}()
 
 		maxWaitTimer := time.NewTimer(0)

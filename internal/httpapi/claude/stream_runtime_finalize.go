@@ -109,6 +109,7 @@ func (s *claudeStreamRuntime) finalize(stopReason string) {
 						"text": cleaned,
 					},
 				})
+				s.textEmitted = true
 			}
 		}
 	}
@@ -141,7 +142,7 @@ func (s *claudeStreamRuntime) finalize(stopReason string) {
 				s.nextBlockIndex++
 				s.sendToolUseBlock(idx, tc)
 			}
-		} else if finalText != "" && !s.textBlockOpen {
+		} else if finalText != "" && !s.textEmitted {
 			idx := s.nextBlockIndex
 			s.nextBlockIndex++
 			s.send("content_block_start", map[string]any{
@@ -160,6 +161,7 @@ func (s *claudeStreamRuntime) finalize(stopReason string) {
 					"text": finalText,
 				},
 			})
+			s.textEmitted = true
 			s.send("content_block_stop", map[string]any{
 				"type":  "content_block_stop",
 				"index": idx,
