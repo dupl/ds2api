@@ -6,6 +6,7 @@ import (
 	"html"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 var xmlAttrPattern = regexp.MustCompile(`(?is)\b([a-z0-9_:-]+)\s*=\s*("([^"]*)"|'([^']*)')`)
@@ -214,7 +215,7 @@ func skipXMLIgnoredSection(text string, i int) (next int, advanced bool, blocked
 		if end < 0 {
 			return 0, false, true
 		}
-		return end + len("]]>"), true, false
+		return end + toolCDATACloseLenAt(text, end), true, false
 	case strings.HasPrefix(text[i:], "<!--"):
 		end := strings.Index(text[i+len("<!--"):], "-->")
 		if end < 0 {
@@ -227,15 +228,26 @@ func skipXMLIgnoredSection(text string, i int) (next int, advanced bool, blocked
 }
 
 func hasASCIIPrefixFoldAt(text string, start int, prefix string) bool {
-	if start < 0 || len(text)-start < len(prefix) {
-		return false
+	_, ok := matchASCIIPrefixFoldAt(text, start, prefix)
+	return ok
+}
+
+func matchASCIIPrefixFoldAt(text string, start int, prefix string) (int, bool) {
+	if start < 0 || start >= len(text) && prefix != "" {
+		return 0, false
 	}
+	idx := start
 	for j := 0; j < len(prefix); j++ {
-		if asciiLower(text[start+j]) != asciiLower(prefix[j]) {
-			return false
+		if idx >= len(text) {
+			return 0, false
 		}
+		ch, size := normalizedASCIIAt(text, idx)
+		if size <= 0 || asciiLower(ch) != asciiLower(prefix[j]) {
+			return 0, false
+		}
+		idx += size
 	}
-	return true
+	return idx - start, true
 }
 
 func asciiLower(b byte) byte {
@@ -266,15 +278,14 @@ func findToolCDATAEnd(text string, from int) int {
 	if from < 0 || from >= len(text) {
 		return -1
 	}
-	const closeMarker = "]]>"
 	firstNonFenceEnd := -1
 	for searchFrom := from; searchFrom < len(text); {
-		rel := strings.Index(text[searchFrom:], closeMarker)
-		if rel < 0 {
+		end := indexToolCDATAClose(text, searchFrom)
+		if end < 0 {
 			break
 		}
-		end := searchFrom + rel
-		searchFrom = end + len(closeMarker)
+		closeLen := toolCDATACloseLenAt(text, end)
+		searchFrom = end + closeLen
 		if cdataOffsetIsInsideMarkdownFence(text[from:end]) {
 			continue
 		}
@@ -286,6 +297,35 @@ func findToolCDATAEnd(text string, from int) int {
 		}
 	}
 	return firstNonFenceEnd
+}
+
+func indexToolCDATAClose(text string, from int) int {
+	if from < 0 {
+		from = 0
+	}
+	asciiIdx := strings.Index(text[from:], "]]>")
+	fullIdx := strings.Index(text[from:], "]]＞")
+	cjkIdx := strings.Index(text[from:], "]]〉")
+	if asciiIdx < 0 && fullIdx < 0 && cjkIdx < 0 {
+		return -1
+	}
+	best := -1
+	for _, idx := range []int{asciiIdx, fullIdx, cjkIdx} {
+		if idx >= 0 && (best < 0 || idx < best) {
+			best = idx
+		}
+	}
+	return from + best
+}
+
+func toolCDATACloseLenAt(text string, idx int) int {
+	if strings.HasPrefix(text[idx:], "]]〉") {
+		return len("]]〉")
+	}
+	if strings.HasPrefix(text[idx:], "]]＞") {
+		return len("]]＞")
+	}
+	return len("]]>")
 }
 
 func cdataEndLooksStructural(text string, after int) bool {
@@ -327,22 +367,29 @@ func cdataOffsetIsInsideMarkdownFence(fragment string) bool {
 }
 
 func findXMLTagEnd(text string, from int) int {
-	quote := byte(0)
-	for i := maxInt(from, 0); i < len(text); i++ {
-		ch := text[i]
+	quote := rune(0)
+	for i := maxInt(from, 0); i < len(text); {
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if r == utf8.RuneError && size == 0 {
+			break
+		}
+		ch := normalizeFullwidthASCII(r)
 		if quote != 0 {
 			if ch == quote {
 				quote = 0
 			}
+			i += size
 			continue
 		}
 		if ch == '"' || ch == '\'' {
 			quote = ch
+			i += size
 			continue
 		}
 		if ch == '>' {
-			return i
+			return i + size - 1
 		}
+		i += size
 	}
 	return -1
 }
@@ -355,7 +402,8 @@ func hasXMLTagBoundary(text string, idx int) bool {
 	case ' ', '\t', '\n', '\r', '>', '/':
 		return true
 	default:
-		return false
+		r, _ := utf8.DecodeRuneInString(text[idx:])
+		return normalizeFullwidthASCII(r) == '>'
 	}
 }
 

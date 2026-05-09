@@ -1,6 +1,6 @@
 'use strict';
 
-const CDATA_PATTERN = /^<!\[CDATA\[([\s\S]*?)]]>$/i;
+const CDATA_PATTERN = /^(?:<|〈)!\[CDATA\[([\s\S]*?)]](?:>|＞|〉)$/i;
 const XML_ATTR_PATTERN = /\b([a-z0-9_:-]+)\s*=\s*("([^"]*)"|'([^']*)')/gi;
 const TOOL_MARKUP_NAMES = [
   { raw: 'tool_calls', canonical: 'tool_calls' },
@@ -102,9 +102,10 @@ function updateCDATAStateLine(inCDATA, line) {
   let state = inCDATA;
   while (pos < lower.length) {
     if (state) {
-      const end = lower.indexOf(']]>', pos);
+      const cdataEnd = findCDATAEnd(lower, pos);
+      const end = cdataEnd.index;
       if (end < 0) return true;
-      pos = end + ']]>'.length;
+      pos = end + cdataEnd.len;
       state = false;
       continue;
     }
@@ -252,8 +253,9 @@ function replaceDSMLToolMarkupOutsideIgnored(text) {
     const tag = scanToolMarkupTagAt(raw, i);
     if (tag) {
       if (tag.dsmlLike) {
-        out += `<${tag.closing ? '/' : ''}${tag.name}${raw.slice(tag.nameEnd, tag.end + 1)}`;
-        if (raw[tag.end] !== '>') {
+        const tail = normalizeToolMarkupTagTailForXML(raw.slice(tag.nameEnd, tag.end + 1));
+        out += `<${tag.closing ? '/' : ''}${tag.name}${tail}`;
+        if (!tail.endsWith('>')) {
           out += '>';
         }
       } else {
@@ -409,11 +411,12 @@ function findMatchingXmlEndTagOutsideCDATA(text, tag, from) {
 
 function skipXmlIgnoredSection(lower, i) {
   if (lower.startsWith('<![cdata[', i)) {
-    const end = lower.indexOf(']]>', i + '<![cdata['.length);
+    const cdataEnd = findCDATAEnd(lower, i + '<![cdata['.length);
+    const end = cdataEnd.index;
     if (end < 0) {
       return { advanced: false, blocked: true, next: i };
     }
-    return { advanced: true, blocked: false, next: end + ']]>'.length };
+    return { advanced: true, blocked: false, next: end + cdataEnd.len };
   }
   if (lower.startsWith('<!--', i)) {
     const end = lower.indexOf('-->', i + '<!--'.length);
@@ -425,14 +428,34 @@ function skipXmlIgnoredSection(lower, i) {
   return { advanced: false, blocked: false, next: i };
 }
 
+function findCDATAEnd(text, from) {
+  const ascii = text.indexOf(']]>', from);
+  const fullwidth = text.indexOf(']]＞', from);
+  const cjk = text.indexOf(']]〉', from);
+  if (ascii < 0 && fullwidth < 0 && cjk < 0) {
+    return { index: -1, len: 0 };
+  }
+  let best = { index: -1, len: 0 };
+  for (const candidate of [
+    { index: ascii, len: ']]>'.length },
+    { index: fullwidth, len: ']]＞'.length },
+    { index: cjk, len: ']]〉'.length },
+  ]) {
+    if (candidate.index >= 0 && (best.index < 0 || candidate.index < best.index)) {
+      best = candidate;
+    }
+  }
+  return best;
+}
+
 function scanToolMarkupTagAt(text, start) {
   const raw = toStringSafe(text);
-  if (!raw || start < 0 || start >= raw.length || raw[start] !== '<') {
+  if (!raw || start < 0 || start >= raw.length || normalizeFullwidthASCIIChar(raw[start]) !== '<') {
     return null;
   }
   const lower = raw.toLowerCase();
   let i = start + 1;
-  while (i < raw.length && raw[i] === '<') {
+  while (i < raw.length && normalizeFullwidthASCIIChar(raw[i]) === '<') {
     i += 1;
   }
   const closing = raw[i] === '/';
@@ -440,11 +463,19 @@ function scanToolMarkupTagAt(text, start) {
     i += 1;
   }
   const prefix = consumeToolMarkupNamePrefix(raw, lower, i);
+  const prefixStart = i;
   i = prefix.next;
-  const dsmlLike = prefix.dsmlLike;
-  const { name, len } = matchToolMarkupName(lower, i, dsmlLike);
+  let dsmlLike = prefix.dsmlLike;
+  let { name, len } = matchToolMarkupName(raw, i, dsmlLike);
   if (!name) {
-    return null;
+    const fallback = matchToolMarkupNameAfterArbitraryPrefix(raw, prefixStart);
+    if (!fallback.ok) {
+      return null;
+    }
+    name = fallback.name;
+    i = fallback.start;
+    len = fallback.len;
+    dsmlLike = true;
   }
   const originalNameEnd = i + len;
   let nameEnd = originalNameEnd;
@@ -541,7 +572,7 @@ function findPartialToolMarkupStart(text) {
   }
   const start = includeDuplicateLeadingLessThan(raw, lastLT);
   const tail = raw.slice(start);
-  if (tail.includes('>')) {
+  if (tail.includes('>') || tail.includes('＞')) {
     return -1;
   }
   return isPartialToolMarkupTagPrefix(tail) ? start : -1;
@@ -556,7 +587,7 @@ function includeDuplicateLeadingLessThan(text, idx) {
 }
 
 function isToolMarkupPipe(ch) {
-  return ch === '|' || ch === '｜';
+  return ch === '|' || ch === '｜' || ch === '␂' || ch === '\x02';
 }
 
 function isPartialToolMarkupTagPrefix(text) {
@@ -579,10 +610,13 @@ function isPartialToolMarkupTagPrefix(text) {
     if (i === raw.length) {
       return true;
     }
-    if (hasToolMarkupNamePrefix(lower.slice(i))) {
+    if (hasToolMarkupNamePrefix(raw, i)) {
       return true;
     }
-    if ('dsml'.startsWith(lower.slice(i))) {
+    if (normalizedASCIITailAt(raw, i).startsWith('dsml') || 'dsml'.startsWith(normalizedASCIITailAt(raw, i))) {
+      return true;
+    }
+    if (hasPartialToolMarkupNameAfterArbitraryPrefix(raw, i)) {
       return true;
     }
     const next = consumeToolMarkupNamePrefixOnce(raw, lower, i);
@@ -607,6 +641,61 @@ function consumeToolMarkupNamePrefix(raw, lower, idx) {
   }
 }
 
+function matchToolMarkupNameAfterArbitraryPrefix(raw, start) {
+  for (let idx = start; idx < raw.length;) {
+    if (isToolMarkupTagTerminator(raw, idx)) {
+      return { ok: false };
+    }
+    for (const name of TOOL_MARKUP_NAMES) {
+      const matched = matchNormalizedASCII(raw, idx, name.raw);
+      if (!matched.ok) continue;
+      if (!toolMarkupPrefixAllowsLocalName(raw.slice(start, idx))) continue;
+      return { ok: true, name: name.canonical, start: idx, len: matched.len };
+    }
+    idx += 1;
+  }
+  return { ok: false };
+}
+
+function hasPartialToolMarkupNameAfterArbitraryPrefix(raw, start) {
+  for (let idx = start; idx < raw.length;) {
+    if (isToolMarkupTagTerminator(raw, idx)) {
+      return false;
+    }
+    if (toolMarkupPrefixAllowsLocalName(raw.slice(start, idx)) && hasToolMarkupNamePrefix(raw, idx)) {
+      return true;
+    }
+    if (toolMarkupPrefixAllowsLocalName(raw.slice(start, idx)) && hasDSMLNamePrefixOrPartial(raw, idx)) {
+      return true;
+    }
+    idx += 1;
+  }
+  return toolMarkupPrefixAllowsLocalName(raw.slice(start));
+}
+
+function hasDSMLNamePrefixOrPartial(raw, start) {
+  const tail = normalizedASCIITailAt(raw, start);
+  return tail.startsWith('dsml') || 'dsml'.startsWith(tail);
+}
+
+function toolMarkupPrefixAllowsLocalName(prefix) {
+  if (!prefix) {
+    return false;
+  }
+  if (normalizedASCIITailAt(prefix, 0).includes('dsml')) {
+    return true;
+  }
+  if (/[="'"]/.test(prefix)) {
+    return false;
+  }
+  const previous = normalizeFullwidthASCIIChar(prefix[prefix.length - 1] || '');
+  return !/^[A-Za-z0-9]$/.test(previous);
+}
+
+function isToolMarkupTagTerminator(raw, idx) {
+  return raw[idx] === '>' || normalizeFullwidthASCIIChar(raw[idx] || '') === '>';
+}
+
 function consumeToolMarkupNamePrefixOnce(raw, lower, idx) {
   if (idx < raw.length && isToolMarkupPipe(raw[idx])) {
     return { next: idx + 1, ok: true };
@@ -614,32 +703,87 @@ function consumeToolMarkupNamePrefixOnce(raw, lower, idx) {
   if (idx < raw.length && [' ', '\t', '\r', '\n'].includes(raw[idx])) {
     return { next: idx + 1, ok: true };
   }
-  if (lower.startsWith('dsml', idx)) {
-    let next = idx + 'dsml'.length;
-    if (next < raw.length && raw[next] === '-') {
+  const dsml = matchNormalizedASCII(raw, idx, 'dsml');
+  if (dsml.ok) {
+    let next = idx + dsml.len;
+    const sep = normalizeFullwidthASCIIChar(raw[next] || '');
+    if (next < raw.length && (sep === '-' || sep === '_')) {
       next += 1;
     }
     return { next, ok: true };
   }
+  const arbitrary = consumeArbitraryToolMarkupNamePrefix(raw, lower, idx);
+  if (arbitrary.ok) {
+    return arbitrary;
+  }
   return { next: idx, ok: false };
 }
 
-function hasToolMarkupNamePrefix(lowerTail) {
+function consumeArbitraryToolMarkupNamePrefix(raw, lower, idx) {
+  const first = consumeToolMarkupPrefixSegment(raw, idx);
+  if (!first.ok) {
+    return { next: idx, ok: false };
+  }
+  let j = first.next;
+  while (j < raw.length) {
+    const segment = consumeToolMarkupPrefixSegment(raw, j);
+    if (!segment.ok) break;
+    j = segment.next;
+  }
+  let k = j;
+  while (k < raw.length && [' ', '\t', '\r', '\n'].includes(raw[k])) {
+    k += 1;
+  }
+  let next = k;
+  let ok = false;
+  if (next < raw.length && isToolMarkupPipe(raw[next])) {
+    next += 1;
+    ok = true;
+  } else if (next < raw.length && ['_', '-'].includes(normalizeFullwidthASCIIChar(raw[next]))) {
+    next += 1;
+    ok = true;
+  }
+  if (!ok) {
+    return { next: idx, ok: false };
+  }
+  while (next < raw.length && [' ', '\t', '\r', '\n'].includes(raw[next])) {
+    next += 1;
+  }
+  if (!hasToolMarkupNamePrefix(raw, next)) {
+    return { next: idx, ok: false };
+  }
+  return { next, ok: true };
+}
+
+function consumeToolMarkupPrefixSegment(raw, idx) {
+  if (idx < 0 || idx >= raw.length) {
+    return { next: idx, ok: false };
+  }
+  const ch = normalizeFullwidthASCIIChar(raw[idx]);
+  if (/^[A-Za-z0-9]$/.test(ch)) {
+    return { next: idx + 1, ok: true };
+  }
+  return { next: idx, ok: false };
+}
+
+function hasToolMarkupNamePrefix(raw, start) {
+  const tail = normalizedASCIITailAt(raw, start);
   for (const name of TOOL_MARKUP_NAMES) {
-    if (lowerTail.startsWith(name.raw) || name.raw.startsWith(lowerTail)) {
+    if (tail.startsWith(name.raw) || name.raw.startsWith(tail)) {
       return true;
     }
   }
   return false;
 }
 
-function matchToolMarkupName(lower, start, dsmlLike) {
+function matchToolMarkupName(raw, start, dsmlLike) {
   for (const name of TOOL_MARKUP_NAMES) {
     if (name.dsmlOnly && !dsmlLike) {
       continue;
     }
-    if (lower.startsWith(name.raw, start)) {
-      return { name: name.canonical, len: name.raw.length };
+    const matched = matchNormalizedASCII(raw, start, name.raw);
+    if (matched.ok) {
+      return { name: name.canonical, len: matched.len };
     }
   }
   return { name: '', len: 0 };
@@ -649,17 +793,18 @@ function findXmlTagEnd(text, from) {
   let quote = '';
   for (let i = Math.max(0, from || 0); i < text.length; i += 1) {
     const ch = text[i];
+    const normalized = normalizeFullwidthASCIIChar(ch);
     if (quote) {
-      if (ch === quote) {
+      if (normalized === quote) {
         quote = '';
       }
       continue;
     }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
+    if (normalized === '"' || normalized === "'") {
+      quote = normalized;
       continue;
     }
-    if (ch === '>') {
+    if (normalized === '>') {
       return i;
     }
   }
@@ -670,11 +815,88 @@ function hasXmlTagBoundary(text, idx) {
   if (idx >= text.length) {
     return true;
   }
-  return [' ', '\t', '\n', '\r', '>', '/'].includes(text[idx]);
+  return [' ', '\t', '\n', '\r', '>', '/'].includes(text[idx])
+    || normalizeFullwidthASCIIChar(text[idx]) === '>';
 }
 
 function isSelfClosingXmlTag(startTag) {
   return toStringSafe(startTag).trim().endsWith('/');
+}
+
+function normalizeFullwidthASCIIChar(ch) {
+  if (!ch) {
+    return ch;
+  }
+  if (ch === '〈') {
+    return '<';
+  }
+  if (ch === '〉') {
+    return '>';
+  }
+  const code = ch.charCodeAt(0);
+  if (code >= 0xff01 && code <= 0xff5e) {
+    return String.fromCharCode(code - 0xfee0);
+  }
+  return ch;
+}
+
+function normalizedASCIITailAt(raw, start) {
+  let out = '';
+  for (let i = Math.max(0, start || 0); i < raw.length; i += 1) {
+    const ch = normalizeFullwidthASCIIChar(raw[i]).toLowerCase();
+    if (ch.charCodeAt(0) > 0x7f) {
+      break;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function matchNormalizedASCII(raw, start, expected) {
+  let idx = start;
+  for (let j = 0; j < expected.length; j += 1) {
+    if (idx >= raw.length) {
+      return { ok: false, len: 0 };
+    }
+    const ch = normalizeFullwidthASCIIChar(raw[idx]).toLowerCase();
+    if (ch !== expected[j].toLowerCase()) {
+      return { ok: false, len: 0 };
+    }
+    idx += 1;
+  }
+  return { ok: true, len: idx - start };
+}
+
+function normalizeToolMarkupTagTailForXML(tail) {
+  let out = '';
+  const raw = typeof tail === 'string' ? tail : String(tail || '');
+  let quote = '';
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    const normalized = normalizeFullwidthASCIIChar(ch);
+    if (quote) {
+      out += normalized;
+      if (normalized === quote) {
+        quote = '';
+      }
+    } else if (normalized === '"' || normalized === "'") {
+      quote = normalized;
+      out += normalized;
+    } else if (normalized === '|') {
+      let j = i + 1;
+      while (j < raw.length && [' ', '\t', '\r', '\n'].includes(raw[j])) {
+        j += 1;
+      }
+      if (normalizeFullwidthASCIIChar(raw[j] || '') !== '>') {
+        out += normalized;
+      }
+    } else if (['>', '/', '='].includes(normalized)) {
+      out += normalized;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
 }
 
 function parseMarkupInput(raw) {

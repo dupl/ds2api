@@ -72,6 +72,97 @@ EOF
 	}
 }
 
+func TestParseToolCallsSupportsUnderscoredDSMLShell(t *testing.T) {
+	text := `<dsml_tool_calls>
+<dsml_invoke name="search_web">
+<dsml_parameter name="query"><![CDATA[2026年5月 热点事件]]></dsml_parameter>
+<dsml_parameter name="topic"><![CDATA[news]]></dsml_parameter>
+</dsml_invoke>
+<dsml_invoke name="eval_javascript">
+<dsml_parameter name="code"><![CDATA[1 + 1]]></dsml_parameter>
+</dsml_invoke>
+</dsml_tool_calls>`
+	calls := ParseToolCalls(text, []string{"search_web", "eval_javascript"})
+	if len(calls) != 2 {
+		t.Fatalf("expected two underscored DSML calls, got %#v", calls)
+	}
+	if calls[0].Name != "search_web" || calls[0].Input["query"] != "2026年5月 热点事件" || calls[0].Input["topic"] != "news" {
+		t.Fatalf("unexpected first underscored DSML call: %#v", calls[0])
+	}
+	if calls[1].Name != "eval_javascript" || calls[1].Input["code"] != "1 + 1" {
+		t.Fatalf("unexpected second underscored DSML call: %#v", calls[1])
+	}
+}
+
+func TestParseToolCallsSupportsArbitraryPrefixedToolMarkup(t *testing.T) {
+	cases := []string{
+		`<abc|tool_calls><abc|invoke name="Read"><abc|parameter name="file_path">README.md</abc|parameter></abc|invoke></abc|tool_calls>`,
+		`<vendor_tool_calls><vendor_invoke name="Read"><vendor_parameter name="file_path">README.md</vendor_parameter></vendor_invoke></vendor_tool_calls>`,
+		`<agent - tool_calls><agent - invoke name="Read"><agent - parameter name="file_path">README.md</agent - parameter></agent - invoke></agent - tool_calls>`,
+	}
+	for _, text := range cases {
+		calls := ParseToolCalls(text, []string{"Read"})
+		if len(calls) != 1 {
+			t.Fatalf("expected one arbitrary-prefixed tool call for %q, got %#v", text, calls)
+		}
+		if calls[0].Name != "Read" || calls[0].Input["file_path"] != "README.md" {
+			t.Fatalf("unexpected arbitrary-prefixed parse result: %#v", calls[0])
+		}
+	}
+}
+
+func TestParseToolCallsSupportsFullwidthDSMLShell(t *testing.T) {
+	text := `<ｄＳＭＬ｜tool_calls>
+  <ｄＳＭＬ｜invoke name="Read">
+    <ｄＳＭＬ｜parameter name="file_path"＞<![CDATA[/Users/aq/Desktop/myproject/Personal_Blog/README.md]]＞</ｄＳＭＬ｜parameter>
+  </ｄＳＭＬ｜invoke>
+  <ｄＳＭＬ｜invoke name="Read">
+    <ｄＳＭＬ｜parameter name="file_path"＞<![CDATA[/Users/aq/Desktop/myproject/Personal_Blog/index.html]]＞</ｄＳＭＬ｜parameter>
+  </ｄＳＭＬ｜invoke>
+</ｄＳＭＬ｜tool_calls>`
+	calls := ParseToolCalls(text, []string{"Read"})
+	if len(calls) != 2 {
+		t.Fatalf("expected two fullwidth DSML calls, got %#v", calls)
+	}
+	if calls[0].Name != "Read" || calls[0].Input["file_path"] != "/Users/aq/Desktop/myproject/Personal_Blog/README.md" {
+		t.Fatalf("unexpected first fullwidth DSML call: %#v", calls[0])
+	}
+	if calls[1].Name != "Read" || calls[1].Input["file_path"] != "/Users/aq/Desktop/myproject/Personal_Blog/index.html" {
+		t.Fatalf("unexpected second fullwidth DSML call: %#v", calls[1])
+	}
+}
+
+func TestParseToolCallsSupportsCJKAngleDSMDrift(t *testing.T) {
+	text := `<DSM｜tool_calls>
+<DSM｜invoke name="Bash">
+<DSM｜parameter name="description"｜>〈![CDATA[Show commits on local dev not on origin/dev]]〉〈/DSM｜parameter〉
+<DSM｜parameter name="command"｜>〈![CDATA[git log --oneline origin/dev..dev]]〉〈/DSM｜parameter〉
+〈/DSM｜invoke〉
+<DSM｜invoke name="Bash">
+<DSM｜parameter name="description"｜>〈![CDATA[Show commits on origin/dev not on local dev]]〉〈/DSM｜parameter〉
+<DSM｜parameter name="command"｜>〈![CDATA[git log --oneline dev..origin/dev]]〉〈/DSM｜parameter〉
+〈/DSM｜invoke〉
+<DSM｜invoke name="Bash">
+<DSM｜parameter name="description"｜>〈![CDATA[Check tracking branch status]]〉〈/DSM｜parameter〉
+<DSM｜parameter name="command"｜>〈![CDATA[git status -b --short]]〉〈/DSM｜parameter〉
+〈/DSM｜invoke〉
+〈/DSM｜tool_calls〉`
+
+	calls := ParseToolCalls(text, []string{"Bash"})
+	if len(calls) != 3 {
+		t.Fatalf("expected three CJK-angle DSM drift calls, got %#v", calls)
+	}
+	if calls[0].Name != "Bash" || calls[0].Input["command"] != "git log --oneline origin/dev..dev" {
+		t.Fatalf("unexpected first CJK-angle DSM drift call: %#v", calls[0])
+	}
+	if calls[1].Name != "Bash" || calls[1].Input["description"] != "Show commits on origin/dev not on local dev" {
+		t.Fatalf("unexpected second CJK-angle DSM drift call: %#v", calls[1])
+	}
+	if calls[2].Name != "Bash" || calls[2].Input["command"] != "git status -b --short" {
+		t.Fatalf("unexpected third CJK-angle DSM drift call: %#v", calls[2])
+	}
+}
+
 func TestParseToolCallsIgnoresBareHyphenatedToolCallsLookalike(t *testing.T) {
 	text := `<tool-calls><invoke name="Bash"><parameter name="command">pwd</parameter></invoke></tool-calls>`
 	calls := ParseToolCalls(text, []string{"Bash"})
@@ -516,14 +607,17 @@ func TestParseToolCallsDetailedMarksToolCallsSyntax(t *testing.T) {
 	}
 }
 
-func TestParseToolCallsRejectsAllEmptyParameterPayload(t *testing.T) {
+func TestParseToolCallsAllowsAllEmptyParameterPayload(t *testing.T) {
 	text := `<tool_calls><invoke name="Bash"><parameter name="command"></parameter><parameter name="description">   </parameter><parameter name="timeout"></parameter></invoke></tool_calls>`
 	res := ParseToolCallsDetailed(text, []string{"Bash"})
 	if !res.SawToolCallSyntax {
 		t.Fatalf("expected tool syntax to be detected, got %#v", res)
 	}
-	if len(res.Calls) != 0 {
-		t.Fatalf("expected all-empty payload to be rejected, got %#v", res.Calls)
+	if len(res.Calls) != 1 {
+		t.Fatalf("expected all-empty payload to be parsed, got %#v", res.Calls)
+	}
+	if res.Calls[0].Input["command"] != "" || res.Calls[0].Input["description"] != "" || res.Calls[0].Input["timeout"] != "" {
+		t.Fatalf("expected empty parameters to be preserved, got %#v", res.Calls[0].Input)
 	}
 }
 

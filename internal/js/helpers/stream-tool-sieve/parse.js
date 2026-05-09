@@ -113,9 +113,10 @@ function filterToolCallsDetailed(parsed, toolNames) {
     if (!tc || !tc.name) {
       continue;
     }
+    const input = tc.input && typeof tc.input === 'object' && !Array.isArray(tc.input) ? tc.input : {};
     calls.push({
       name: tc.name,
-      input: tc.input && typeof tc.input === 'object' && !Array.isArray(tc.input) ? tc.input : {},
+      input,
     });
   }
   return { calls, rejectedToolNames: [] };

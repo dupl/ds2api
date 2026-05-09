@@ -187,9 +187,9 @@ test('vercel stream emits Go-parity empty-output failure on DONE', async () => {
   const { frames } = await runMockVercelStream(['data: [DONE]\n\n']);
   assert.equal(frames.length, 2);
   const failed = JSON.parse(frames[0]);
-  assert.equal(failed.status_code, 429);
-  assert.equal(failed.error.type, 'rate_limit_error');
-  assert.equal(failed.error.code, 'upstream_empty_output');
+  assert.equal(failed.status_code, 503);
+  assert.equal(failed.error.type, 'service_unavailable_error');
+  assert.equal(failed.error.code, 'upstream_unavailable');
   assert.equal(frames[1], '[DONE]');
 });
 
@@ -207,6 +207,21 @@ test('vercel stream retries empty output once and keeps one terminal frame', asy
   assert.equal(parsed[1].choices[0].finish_reason, 'stop');
   assert.equal(parsed[0].id, parsed[1].id);
   assert.match(completionBodies[1].prompt, /Previous reply had no visible output\. Please regenerate the visible final answer or tool call now\.$/);
+});
+
+test('vercel stream retries thinking-only output once', async () => {
+  const { frames, fetchURLs, fetchBodies } = await runMockVercelStreamSequence([
+    ['data: {"response_message_id":42,"p":"response/thinking_content","v":"plan"}\n\n', 'data: [DONE]\n\n'],
+    ['data: {"p":"response/content","v":"visible"}\n\n', 'data: [DONE]\n\n'],
+  ], { thinking_enabled: true });
+  const parsed = frames.filter((frame) => frame !== '[DONE]').map((frame) => JSON.parse(frame));
+  const completionBodies = fetchBodies.filter((body) => Object.hasOwn(body, 'prompt'));
+  assert.equal(fetchURLs.filter((url) => url === 'https://chat.deepseek.com/api/v0/chat/completion').length, 2);
+  assert.equal(frames.filter((frame) => frame === '[DONE]').length, 1);
+  assert.equal(completionBodies[1].parent_message_id, 42);
+  assert.equal(parsed[0].choices[0].delta.reasoning_content, 'plan');
+  assert.equal(parsed[1].choices[0].delta.content, 'visible');
+  assert.equal(parsed[2].choices[0].finish_reason, 'stop');
 });
 
 test('vercel stream coalesces many small content deltas while keeping one choice', async () => {

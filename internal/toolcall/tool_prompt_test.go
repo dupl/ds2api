@@ -119,6 +119,20 @@ func TestBuildToolCallInstructions_AnchorsMissingOpeningWrapperFailureMode(t *te
 	}
 }
 
+func TestBuildToolCallInstructions_RejectsEmptyParametersInPrompt(t *testing.T) {
+	out := BuildToolCallInstructions([]string{"Bash"})
+	for _, want := range []string{
+		"Do not emit placeholder, blank, or whitespace-only parameters.",
+		"If a required parameter value is unknown, ask the user or answer normally instead of outputting an empty tool call.",
+		"Never call them with an empty command.",
+		"Wrong 4 — empty parameters",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected empty-parameter instruction %q, got: %s", want, out)
+		}
+	}
+}
+
 func findInvokeBlocks(text, name string) []string {
 	open := `<｜DSML｜invoke name="` + name + `">`
 	remaining := text

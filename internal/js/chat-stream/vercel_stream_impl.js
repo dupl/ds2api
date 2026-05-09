@@ -641,9 +641,9 @@ function upstreamEmptyOutputDetail(contentFilter, _text, thinking) {
     };
   }
   return {
-    status: 429,
-    message: 'Upstream account hit a rate limit and returned empty output.',
-    code: 'upstream_empty_output',
+    status: 503,
+    message: 'Upstream service is unavailable and returned no output.',
+    code: 'upstream_unavailable',
   };
 }
 

@@ -1,5 +1,5 @@
 'use strict';
-const { parseToolCalls } = require('./parse');
+const { parseToolCallsDetailed } = require('./parse');
 const {
   findToolMarkupTagOutsideIgnored,
   findMatchingToolMarkupClose,
@@ -27,18 +27,29 @@ function consumeXMLToolCapture(captured, toolNames, trimWrappingJSONFence) {
     const xmlBlock = captured.slice(openTag.start, closeTag.end + 1);
     const prefixPart = captured.slice(0, openTag.start);
     const suffixPart = captured.slice(closeTag.end + 1);
-    const parsed = parseToolCalls(xmlBlock, toolNames);
-    if (Array.isArray(parsed) && parsed.length > 0) {
+    const parsed = parseToolCallsDetailed(xmlBlock, toolNames);
+    if (Array.isArray(parsed.calls) && parsed.calls.length > 0) {
       const trimmedFence = trimWrappingJSONFence(prefixPart, suffixPart);
       if (!best || openTag.start < best.start) {
         best = {
           start: openTag.start,
           prefix: trimmedFence.prefix,
-          calls: parsed,
+          calls: parsed.calls,
           suffix: trimmedFence.suffix,
         };
       }
       break;
+    }
+    if (parsed.sawToolCallSyntax) {
+      if (!rejected || openTag.start < rejected.start) {
+        rejected = {
+          start: openTag.start,
+          prefix: prefixPart + xmlBlock,
+          suffix: suffixPart,
+        };
+      }
+      searchFrom = openTag.end + 1;
+      continue;
     }
     if (!rejected || openTag.start < rejected.start) {
       rejected = {
@@ -69,15 +80,18 @@ function consumeXMLToolCapture(captured, toolNames, trimWrappingJSONFence) {
         const xmlBlock = '<tool_calls>' + captured.slice(invokeTag.start, closeTag.end + 1);
         const prefixPart = captured.slice(0, invokeTag.start);
         const suffixPart = captured.slice(closeTag.end + 1);
-        const parsed = parseToolCalls(xmlBlock, toolNames);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        const parsed = parseToolCallsDetailed(xmlBlock, toolNames);
+        if (Array.isArray(parsed.calls) && parsed.calls.length > 0) {
           const trimmedFence = trimWrappingJSONFence(prefixPart, suffixPart);
           return {
             ready: true,
             prefix: trimmedFence.prefix,
-            calls: parsed,
+            calls: parsed.calls,
             suffix: trimmedFence.suffix,
           };
+        }
+        if (parsed.sawToolCallSyntax) {
+          return { ready: true, prefix: prefixPart + captured.slice(invokeTag.start, closeTag.end + 1), calls: [], suffix: suffixPart };
         }
         return { ready: true, prefix: prefixPart + captured.slice(invokeTag.start, closeTag.end + 1), calls: [], suffix: suffixPart };
       }

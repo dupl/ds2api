@@ -93,11 +93,48 @@ func TestNormalizeClaudeMessagesToolUseToAssistantToolCalls(t *testing.T) {
 		t.Fatalf("expected call id preserved, got %#v", call)
 	}
 	content, _ := m["content"].(string)
-	if !containsStr(content, "<|DSML|tool_calls>") || !containsStr(content, `<|DSML|invoke name="search_web">`) {
+	if !containsStr(content, "<｜DSML｜tool_calls>") || !containsStr(content, `<｜DSML｜invoke name="search_web">`) {
 		t.Fatalf("expected assistant content to include DSML tool call history, got %q", content)
 	}
-	if !containsStr(content, `<|DSML|parameter name="query"><![CDATA[latest]]></|DSML|parameter>`) {
+	if !containsStr(content, `<｜DSML｜parameter name="query"><![CDATA[latest]]></｜DSML｜parameter>`) {
 		t.Fatalf("expected assistant content to include serialized parameters, got %q", content)
+	}
+}
+
+func TestNormalizeClaudeMessagesPreservesThinkingOnToolUseHistory(t *testing.T) {
+	msgs := []any{
+		map[string]any{
+			"role": "assistant",
+			"content": []any{
+				map[string]any{"type": "thinking", "thinking": "need live search before answering"},
+				map[string]any{
+					"type":  "tool_use",
+					"id":    "call_1",
+					"name":  "search_web",
+					"input": map[string]any{"query": "latest"},
+				},
+			},
+		},
+	}
+
+	got := normalizeClaudeMessages(msgs)
+	if len(got) != 1 {
+		t.Fatalf("expected one normalized tool-call message, got %#v", got)
+	}
+	m := got[0].(map[string]any)
+	if m["reasoning_content"] != "need live search before answering" {
+		t.Fatalf("expected thinking preserved as reasoning_content, got %#v", m)
+	}
+	tc, _ := m["tool_calls"].([]any)
+	if len(tc) != 1 {
+		t.Fatalf("expected one tool call, got %#v", m["tool_calls"])
+	}
+	prompt := buildClaudePromptTokenText(got, true)
+	if !containsStr(prompt, "[reasoning_content]\nneed live search before answering\n[/reasoning_content]") {
+		t.Fatalf("expected thinking in prompt history, got %q", prompt)
+	}
+	if !containsStr(prompt, `<｜DSML｜invoke name="search_web">`) {
+		t.Fatalf("expected tool call in prompt history, got %q", prompt)
 	}
 }
 

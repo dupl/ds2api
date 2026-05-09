@@ -54,7 +54,7 @@ func consumeXMLToolCapture(captured string, toolNames []string) (prefix string, 
 		}
 		if parsed.SawToolCallSyntax {
 			if rejected == nil || tag.Start < rejected.start {
-				rejected = &rejectedBlock{start: tag.Start, prefix: prefixPart, suffix: suffixPart}
+				rejected = &rejectedBlock{start: tag.Start, prefix: prefixPart + xmlBlock, suffix: suffixPart}
 			}
 			searchFrom = tag.End + 1
 			continue
@@ -88,7 +88,7 @@ func consumeXMLToolCapture(captured string, toolNames []string) (prefix string, 
 					return prefixPart, parsed.Calls, suffixPart, true
 				}
 				if parsed.SawToolCallSyntax {
-					return prefixPart, nil, suffixPart, true
+					return prefixPart + captured[invokeTag.Start:closeTag.End+1], nil, suffixPart, true
 				}
 				return prefixPart + captured[invokeTag.Start:closeTag.End+1], nil, suffixPart, true
 			}
